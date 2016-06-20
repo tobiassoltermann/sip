@@ -89,7 +89,7 @@ func (m *Message) SetFrom(proto string, user string, host string, tag string) *M
 }
 func (m *Message) SetContact(proto string, user string, host string, port int) *Message {
 	var value string
-	value = fmt.Sprintf("<%s:%s@%s:%d>", proto, user, host, port)
+	value = fmt.Sprintf("<%s:%s@%s:%d>;transport=tcp", proto, user, host, port)
 	m.Headers.ReplaceAddHeader("Contact", value)
 	return m
 }
@@ -142,8 +142,29 @@ func (m *Message) SetCSeq(number uint32, verb string) *Message {
 	return m
 }
 
+func (m *Message) GetExpires() int {
+	header, err := m.Headers.FindHeaderByName("Expires")
+	if err != nil {
+		log.Println("Field 'Expires' could not be found. Assume 120")
+		return 120
+	}
+	expirationValue, err := strconv.Atoi(header.Value)
+	if err != nil {
+		log.Println("Field 'Expires' could not be parsed. Assume 120")
+		return 120
+	}
+	return expirationValue
+}
+
 func (m *Message) SetExpires(value int) *Message {
 	m.Headers.AddHeader("Expires", strconv.Itoa(300))
+	return m
+}
+
+func (m *Message) SetDigestAuthorizationHeader(authInfo AuthInformation) *Message {
+	value := fmt.Sprintf(`Digest username="%s" realm="%s" nonce="%s" response="%s"`, authInfo.Username, authInfo.Wwwauth.Realm, authInfo.Wwwauth.Nonce, authInfo.FinalHash())
+	m.Headers.AddHeader("Authorization", value)
+	log.Println(value)
 	return m
 }
 
@@ -169,5 +190,6 @@ func (m *Message) String() string {
 		s += crtLine
 	}
 	s += "\n"
+	s += string(m.Body)
 	return s
 }

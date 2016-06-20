@@ -3,9 +3,18 @@ package sipbase
 import (
 	"bufio"
 	"io"
-	"log"
 	"strconv"
 	"strings"
+
+	"log"
+)
+
+type ParserState int
+
+const (
+	FIRST_LINE ParserState = iota
+	HEADERS
+	BODY
 )
 
 type Parser struct {
@@ -18,8 +27,12 @@ type Parser struct {
 
 type Callback func(Message)
 
-func NewParser(reader io.Reader) Parser {
-	p := Parser{}
+/*type CallbackObj struct {
+	F sipbase.Callback
+}*/
+
+func NewParser(reader io.Reader) *Parser {
+	p := &Parser{}
 	p.state = false
 	p.reader = reader
 	p.bufReader = bufio.NewReader(p.reader)
@@ -27,23 +40,31 @@ func NewParser(reader io.Reader) Parser {
 	return p
 }
 
-func (p *Parser) SetCallback(callback Callback) {
-	p.callback = callback
+func (p *Parser) SetCallback(newCallback Callback) {
+	log.Println("=> SET CALLBACK: ", newCallback)
+	p.callback = newCallback
+	log.Println("=> CALLBACK SET")
 }
 
 func (p *Parser) StartParsing() {
+	go p.parse()
+}
+
+func (p *Parser) parse() {
+	log.Println("Callback ", p.callback)
 	if p.callback == nil {
 		log.Println("Error: Callback function must be set")
 	}
 	go func() {
-		state := 0 // 0 = first line, 1 = headers, 2 = content
+		state := FIRST_LINE // 0 = first line, 1 = headers, 2 = content
 		var message Message
-		var expectedContentLength int
-		var toRead int = expectedContentLength
+		var toRead int
 		for {
 			switch state {
-			case 0:
+			case FIRST_LINE:
 				line, err := Readln(p.bufReader)
+				log.Println(p.callback)
+				log.Println("line: ", line)
 				if err != nil {
 					log.Println("Error: ", err)
 				}
@@ -61,22 +82,28 @@ func (p *Parser) StartParsing() {
 					uri := elements[1]
 					message = CreateRequest(method, uri)
 				}
-				state = 1
-			case 1:
+				state = HEADERS
+			case HEADERS:
 				line, err := Readln(p.bufReader)
+				log.Println("1: line=", line)
 				if err != nil {
 					log.Println("Error: ", err)
 				}
 				if line == "" {
-					state = 2
+					log.Println("Set State to 2")
+					state = BODY
 					continue
 				}
 
 				headerLine := strings.Split(line, ": ")
+				log.Println("headerLine2", headerLine)
 				headerName := headerLine[0]
 				headerValue := headerLine[1]
+				if headerName == "Content-Length" {
+					toRead, _ = strconv.Atoi(headerValue)
+				}
 				message.Headers.AddHeader(headerName, headerValue)
-			case 2:
+			case BODY:
 				if toRead > 0 {
 					crtByte, err := p.bufReader.ReadByte()
 					if err != nil {
@@ -86,8 +113,11 @@ func (p *Parser) StartParsing() {
 					toRead--
 				} else {
 					log.Println("Message done. Emit.")
+					log.Println("p: ", p)
+					log.Println("message: ", message)
+					log.Println("Callback: ", p.callback)
 					p.callback(message)
-					state = 0
+					state = FIRST_LINE
 				}
 
 			}

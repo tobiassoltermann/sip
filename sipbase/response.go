@@ -15,7 +15,9 @@ func CreateResponseHeadline(version string, code int, reply string) (line Respon
 	r := ResponseHeadline{version, code, reply}
 	return r
 }
-
+func (r *ResponseHeadline) IsFinal() bool {
+	return r.Code > 199
+}
 func (r ResponseHeadline) ToString() string {
 	return fmt.Sprintf("%s %d %s", r.Version, r.Code, r.Reply)
 }
