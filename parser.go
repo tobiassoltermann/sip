@@ -1,4 +1,4 @@
-package sipbase
+package sip
 
 import (
 	"bufio"
@@ -25,11 +25,7 @@ type Parser struct {
 	callback Callback
 }
 
-type Callback func(Message)
-
-/*type CallbackObj struct {
-	F sipbase.Callback
-}*/
+type Callback func(*Message)
 
 func NewParser(reader io.Reader) *Parser {
 	p := &Parser{}
@@ -41,9 +37,7 @@ func NewParser(reader io.Reader) *Parser {
 }
 
 func (p *Parser) SetCallback(newCallback Callback) {
-	log.Println("=> SET CALLBACK: ", newCallback)
 	p.callback = newCallback
-	log.Println("=> CALLBACK SET")
 }
 
 func (p *Parser) StartParsing() {
@@ -51,10 +45,6 @@ func (p *Parser) StartParsing() {
 }
 
 func (p *Parser) parse() {
-	log.Println("Callback ", p.callback)
-	if p.callback == nil {
-		log.Println("Error: Callback function must be set")
-	}
 	go func() {
 		state := FIRST_LINE // 0 = first line, 1 = headers, 2 = content
 		var message Message
@@ -63,8 +53,6 @@ func (p *Parser) parse() {
 			switch state {
 			case FIRST_LINE:
 				line, err := Readln(p.bufReader)
-				log.Println(p.callback)
-				log.Println("line: ", line)
 				if err != nil {
 					log.Println("Error: ", err)
 				}
@@ -85,18 +73,15 @@ func (p *Parser) parse() {
 				state = HEADERS
 			case HEADERS:
 				line, err := Readln(p.bufReader)
-				log.Println("1: line=", line)
 				if err != nil {
 					log.Println("Error: ", err)
 				}
 				if line == "" {
-					log.Println("Set State to 2")
 					state = BODY
 					continue
 				}
 
 				headerLine := strings.Split(line, ": ")
-				log.Println("headerLine2", headerLine)
 				headerName := headerLine[0]
 				headerValue := headerLine[1]
 				if headerName == "Content-Length" {
@@ -112,11 +97,7 @@ func (p *Parser) parse() {
 					message.Body = append(message.Body, crtByte)
 					toRead--
 				} else {
-					log.Println("Message done. Emit.")
-					log.Println("p: ", p)
-					log.Println("message: ", message)
-					log.Println("Callback: ", p.callback)
-					p.callback(message)
+					p.callback(&message)
 					state = FIRST_LINE
 				}
 

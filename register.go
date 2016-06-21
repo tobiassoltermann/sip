@@ -1,4 +1,4 @@
-package sipstack
+package sip
 
 type RegisterInfo struct {
 	Registrar Connectinfo

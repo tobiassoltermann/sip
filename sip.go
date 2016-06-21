@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
-	sipbase "sip/sipbase"
-	sipstack "sip/sipstack"
-	_ "strconv"
+	"strconv"
 )
 
 type RegistrationResult int
@@ -19,22 +17,25 @@ const (
 )
 
 type SipClient struct {
-	socket    net.Conn
-	Listeners map[string]sipstack.Listener
-
-	OwnIP net.IP
-
+	socket           net.Conn
+	Listeners        map[string]*Listener
 	DefaultTransport string
+	registerInfo     *RegisterInfo
+	done             chan int
 
-	done chan int
+	callCallback   CallCallback
+	cancelCallback CallCallback
 }
+type Call struct {
+	From string
+}
+type CallCallback func(*Call)
 
 func CreateClient() SipClient {
 	s := SipClient{}
 
 	// DEFAULTS:
-	s.OwnIP = sipbase.GetLocalIP()
-	s.Listeners = make(map[string]sipstack.Listener)
+	s.Listeners = make(map[string]*Listener)
 	return s
 }
 
@@ -45,85 +46,94 @@ func (s *SipClient) Listen(transport string, host string, port int) error {
 		return errors.New("Already accepting connections on this Listener")
 	}
 
-	var err error
-	l := sipstack.CreateListener(transport, host, port)
+	//	var err error
+	var dialogListener func(d *Dialog) = func(d *Dialog) {
+		d.OnMessage(func(m *Message) {
+			switch m.GetType() {
+			case REQUEST:
+				requestHeadline, ok := m.Headline.(RequestHeadline)
+				if ok {
+					switch requestHeadline.Method {
+					case "INVITE":
+						d.Reply100Trying()
+						d.Reply180Ringing()
+
+						c := Call{}
+						c.From = m.GetFrom()
+
+						if s.callCallback != nil {
+							s.callCallback(&c)
+						}
+					case "CANCEL":
+						d.Reply200Ok()
+						c := Call{}
+						c.From = m.GetFrom()
+						if s.cancelCallback != nil {
+							s.cancelCallback(&c)
+						}
+					default:
+
+						log.Println("Message is:", requestHeadline.Method)
+					}
+				}
+
+			}
+		})
+	}
+
+	l := CreateListener(transport, host, port, s, dialogListener)
 
 	s.Listeners[id] = l
-	if err != nil {
-		log.Println("Error:", err)
-	}
 
 	return nil
 }
 
-/*
-func (s *SipClient) ensureSocketInit() {
-	if s.socket == nil {
-		var err error
-		s.socket, err = net.Dial(strings.ToLower(s.Transport), s.ProxyHost+":"+strconv.Itoa(s.ProxyPort))
-		log.Println("Socket: ", s.socket)
-
-		s.parser = sipbase.NewParser(s.socket)
-		s.parser.SetCallback(func(m sipbase.Message) {
-			log.Println("Message arrived:" + m.String())
-			cseqNumber, verb := m.GetCSeq()
-			if verb == "" {
-				log.Println("Error parsing CSEQ: ", err)
-			} else {
-				log.Println("CSeq is ", cseqNumber)
-				crtRequest, ok := s.PendingRequests[cseqNumber]
-				if ok {
-					log.Println("Found request")
-					if m.GetType() == sipbase.RESPONSE {
-
-						response := RegisterResponse{}
-						response.ResponseMessage = m
-
-						crtRequest.Response <- response
-
-						if response.IsFinal() {
-							// Final response!
-							close(crtRequest.Response)
-						}
-
-					}
-				}
-			}
-		})
-		s.parser.StartParsing()
-
-		if err != nil {
-			log.Println("Error:", err)
-		}
-	}
+func (s *SipClient) OnIncomingCall(callback CallCallback) {
+	s.callCallback = callback
 }
-*/
+func (s *SipClient) OnCancel(callback CallCallback) {
+	s.cancelCallback = callback
+}
+
+func (s *SipClient) StopListeningAll() {
+	numRemaining := len(s.Listeners)
+	done := make(chan bool)
+	for i, crtListener := range s.Listeners {
+		go func() {
+			crtListener.Stop()
+			numRemaining--
+			if numRemaining == 0 {
+				done <- true
+			}
+		}()
+		crtListener.Stop()
+		delete(s.Listeners, i)
+	}
+	_ = <-done
+}
 
 func (s *SipClient) SetDefaultTransport(transport string) {
 	s.DefaultTransport = transport
 }
 
-func (s *SipClient) SetOwnIP(ownIP net.IP) {
-	s.OwnIP = ownIP
-
-}
-
-func (s *SipClient) TryRegister(registerInfo sipstack.RegisterInfo) (RegistrationResult, error) {
+func (s *SipClient) TryRegister(registerInfo *RegisterInfo) (RegistrationResult, error) {
 	connectInfo := registerInfo.Registrar
 	if connectInfo.Transport == "" {
 		connectInfo.Transport = "tcp"
 	}
-	dialog, err := sipstack.CreateDialog(connectInfo.Transport, connectInfo.Host, connectInfo.Port)
+
+	socket, err := net.Dial(connectInfo.Transport, connectInfo.Host+":"+strconv.Itoa(connectInfo.Port))
 	if err != nil {
 		return ERROR, err
 	}
-
+	dialog := CreateDialog(socket, s)
+	log.Printf("[P] Created: %p\n", dialog)
 	unauthRegResult := make(chan RegistrationResult)
-	var auth sipbase.WWWAuthenticate
+	var auth WWWAuthenticate
 	var innerErr error
-	dialog.OnMessage(func(m sipbase.Message) {
-		if m.GetType() == sipbase.RESPONSE {
-			responseHeader, ok := m.Headline.(sipbase.ResponseHeadline)
+	dialog.OnMessage(func(m *Message) {
+		if m.GetType() == RESPONSE {
+			responseHeader, ok := m.Headline.(ResponseHeadline)
 			if !ok {
 				log.Println("Error. Type is RESPONSE, but headline is REQUEST")
 				log.Println("Details: ", m)
@@ -144,7 +154,7 @@ func (s *SipClient) TryRegister(registerInfo sipstack.RegisterInfo) (Registratio
 					return
 				case 401:
 					authLine, err := m.Headers.FindHeaderByName("WWW-Authenticate")
-					auth, err = sipbase.ParseWWWAuthenticate(authLine)
+					auth, err = ParseWWWAuthenticate(authLine)
 					if err != nil {
 						log.Println("Error parsing wwwauthenticate: ", err)
 					}
@@ -172,9 +182,9 @@ func (s *SipClient) TryRegister(registerInfo sipstack.RegisterInfo) (Registratio
 	// Retry registration with authorization information
 	authRegResult := make(chan RegistrationResult)
 
-	dialog.OnMessage(func(m sipbase.Message) {
-		if m.GetType() == sipbase.RESPONSE {
-			responseHeader, ok := m.Headline.(sipbase.ResponseHeadline)
+	dialog.OnMessage(func(m *Message) {
+		if m.GetType() == RESPONSE {
+			responseHeader, ok := m.Headline.(ResponseHeadline)
 			if !ok {
 				log.Println("Error. Type is RESPONSE, but headline is REQUEST")
 				log.Println("Details: ", m)
@@ -202,11 +212,11 @@ func (s *SipClient) TryRegister(registerInfo sipstack.RegisterInfo) (Registratio
 
 	})
 
-	digestAuth, ok1 := auth.(sipbase.DigestWWWAuthenticate)
+	digestAuth, ok1 := auth.(DigestWWWAuthenticate)
 	userInfo := registerInfo.UserInfo
-	digestAuthInfo, ok2 := userInfo.(*sipstack.DigestUserInfoImpl)
+	digestAuthInfo, ok2 := userInfo.(*DigestUserInfoImpl)
 	if ok1 && ok2 {
-		authInfo := sipbase.AuthInformation{
+		authInfo := AuthInformation{
 			digestAuth,
 			userInfo.GetUsername(),
 			digestAuthInfo.GetPassword(),
@@ -220,124 +230,6 @@ func (s *SipClient) TryRegister(registerInfo sipstack.RegisterInfo) (Registratio
 	return res2, innerErr
 }
 
-/*
-func (s *SipClient) TryRegister() (bool, string) {
-	unauthorized := false
-	var finalCode int
-	var reply string
-	var auth sipbase.WWWAuthenticate
-	pendingRequest := s.Register(nil)
-	for {
-		log.Println("Wait for next response")
-		response, more := <-pendingRequest.Response
-		if more {
-			log.Println("Received response. More = ", more)
-
-			message := response.ResponseMessage
-			if response.IsFinal() {
-				delete(s.PendingRequests, s.CSeq)
-				finalCode, err := response.Code()
-				if err != nil {
-					log.Println("Couldn't determine the response code")
-					continue
-				}
-				reply, err := response.Reply()
-				if err != nil {
-					log.Println("Couldn't get the reply text")
-				}
-				registrationOK := finalCode == 200
-				if registrationOK {
-					s.State = REGISTERED
-				} else {
-
-					s.State = UNREGISTERED
-				}
-
-				if finalCode == 401 {
-					unauthorized = true
-					log.Println("Unauthorized! Let's find the WWW-Authenticate")
-					authLine, err := response.ResponseMessage.Headers.FindHeaderByName("WWW-Authenticate")
-					auth, err = sipbase.ParseWWWAuthenticate(authLine)
-					if err != nil {
-						log.Println("Error parsing wwwauthenticate: ", err)
-					}
-					break
-				}
-				log.Println("reply", reply)
-			}
-			log.Println("message", message)
-		} else {
-			break
-		}
-
-	}
-	log.Println("Responses done")
-	log.Println("State registered?")
-	if s.State == REGISTERED {
-		return true, ""
-	}
-	if !unauthorized {
-		return false, "Couldn't register: " + strconv.Itoa(finalCode) + ", " + reply
-	}
-
-	log.Println("Unauthorized. Retry with auth!")
-	log.Println("=================================")
-	log.Println("Auth: ", auth.GetMechanism())
-	authInfo := sipbase.AuthInformation{}
-
-	switch auth.GetMechanism() {
-	case "DIGEST":
-		if digestAuth, ok := auth.(sipbase.DigestWWWAuthenticate); ok {
-			log.Println(digestAuth.Algorithm)
-
-			authInfo.Username = s.Username
-			authInfo.Password = s.Password
-			authInfo.Wwwauth = digestAuth
-			authInfo.URL = s.ProxyHost
-
-		}
-	}
-	pendingAuthRequest := s.Register(&authInfo)
-	for {
-		log.Println("Wait for next response")
-		response, more := <-pendingAuthRequest.Response
-		if more {
-			log.Println("Received response. More = ", more)
-
-			message := response.ResponseMessage
-			log.Println("message", message)
-			if response.IsFinal() {
-				delete(s.PendingRequests, s.CSeq)
-				finalCode, err := response.Code()
-				if err != nil {
-					log.Println("Couldn't determine the response code")
-					continue
-				}
-
-				registrationOK := finalCode == 200
-				if registrationOK {
-					log.Println("Registered.")
-
-					s.State = REGISTERED
-					expiresIn := response.ResponseMessage.GetExpires()
-					log.Println("Registration is valid only for ", expiresIn, "seconds.")
-				} else {
-					s.State = UNREGISTERED
-				}
-
-			}
-
-		} else {
-			break
-		}
-
-	}
-	if s.State == REGISTERED {
-		return true, ""
-	}
-	return false, "Were there any?"
-}
-*/
 func (s *SipClient) WaitAll() {
 	for {
 		value := <-s.done

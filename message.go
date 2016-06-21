@@ -1,4 +1,4 @@
-package sipbase
+package sip
 
 import (
 	"errors"
@@ -77,6 +77,14 @@ func (m *Message) SetRequestId(requestID string) {
 	m.RequestID = requestID
 }
 
+func (m *Message) GetFrom() string {
+	header, err := m.Headers.FindHeaderByName("From")
+	if err != nil {
+		log.Println("Error finding header From", err)
+	}
+	return header.Value
+}
+
 func (m *Message) SetFrom(proto string, user string, host string, tag string) *Message {
 	var value string
 	if tag == "" {
@@ -87,6 +95,11 @@ func (m *Message) SetFrom(proto string, user string, host string, tag string) *M
 	m.Headers.ReplaceAddHeader("From", value)
 	return m
 }
+func (m *Message) SetFromValue(value string) *Message {
+	m.Headers.ReplaceAddHeader("From", value)
+	return m
+}
+
 func (m *Message) SetContact(proto string, user string, host string, port int) *Message {
 	var value string
 	value = fmt.Sprintf("<%s:%s@%s:%d>;transport=tcp", proto, user, host, port)
@@ -96,6 +109,13 @@ func (m *Message) SetContact(proto string, user string, host string, port int) *
 func (m *Message) SetUserAgent(value string) *Message {
 	m.Headers.ReplaceAddHeader("User-Agent", value)
 	return m
+}
+func (m *Message) GetTo() string {
+	header, err := m.Headers.FindHeaderByName("To")
+	if err != nil {
+		log.Println("Error finding header To", err)
+	}
+	return header.Value
 }
 func (m *Message) SetTo(proto string, user string, host string, tag string) *Message {
 	var value string
@@ -107,11 +127,37 @@ func (m *Message) SetTo(proto string, user string, host string, tag string) *Mes
 	m.Headers.ReplaceAddHeader("To", value)
 	return m
 }
+func (m *Message) SetToValue(value string) *Message {
+	m.Headers.ReplaceAddHeader("To", value)
+	return m
+}
+
+func (m *Message) GetVia() string {
+	header, err := m.Headers.FindHeaderByName("Via")
+	if err != nil {
+		log.Println("Error finding header Via", err)
+	}
+	return header.Value
+}
+
 func (m *Message) SetVia(transport string, host string, port int, branch string) *Message {
 	value := fmt.Sprintf("SIP/2.0/%s %s:%d;rport;branch=z9hG4bK%s", transport, host, port, branch)
 	m.Headers.ReplaceAddHeader("Via", value)
 	return m
 }
+func (m *Message) SetViaValue(value string) *Message {
+	m.Headers.ReplaceAddHeader("Via", value)
+	return m
+}
+
+func (m *Message) GetCallId() string {
+	header, err := m.Headers.FindHeaderByName("Call-ID")
+	if err != nil {
+		log.Println("Error finding header Call-ID", err)
+	}
+	return header.Value
+}
+
 func (m *Message) SetCallId(value string) *Message {
 	m.Headers.ReplaceAddHeader("Call-ID", value)
 	return m

@@ -1,10 +1,9 @@
-package sipstack
+package sip
 
 import (
 	"errors"
 	"log"
 	"net"
-	"sip/sipbase"
 	"strconv"
 )
 
@@ -21,6 +20,7 @@ type Outbound struct {
 
 func Dial(transport string, host string, port int) (Outbound, error) {
 	o := Outbound{}
+
 	o.Conn = Connectinfo{
 		transport,
 		host,
@@ -36,18 +36,22 @@ func Dial(transport string, host string, port int) (Outbound, error) {
 
 type Listener struct {
 	Connectinfo
-	conns    []net.Conn
-	listener net.Listener
-	running  bool
+	conns           []net.Conn
+	listener        net.Listener
+	running         bool
+	stoppingChannel chan bool
 }
 
 func (l *Listener) Stop() {
-	l.running = true
+	l.running = false
+	l.listener.Close()
+	_ = <-l.stoppingChannel
 }
 
-func CreateListener(transport string, host string, port int) Listener {
+func CreateListener(transport string, host string, port int, sipClient *SipClient, dialogListener func(d *Dialog)) *Listener {
 	var err error
 	var l Listener = Listener{}
+	l.stoppingChannel = make(chan bool, 1)
 	l.Host = host
 	l.Port = port
 	l.Transport = transport
@@ -56,17 +60,18 @@ func CreateListener(transport string, host string, port int) Listener {
 		log.Println("Error listening for ", transport, host, port, " due to ", err)
 	}
 	l.running = true
+
 	go func() {
 		for l.running {
-			conn, _ := l.listener.Accept()
-			l.conns = append(l.conns, conn)
-			parser := sipbase.NewParser(conn)
-			parser.SetCallback(func(m sipbase.Message) {
-				log.Println("Message arrived: " + m.String())
-			})
-			parser.StartParsing()
+			conn, errListen := l.listener.Accept()
+			if errListen != nil {
+				break
+			}
+			d := CreateDialog(conn, sipClient)
+			dialogListener(d)
 		}
+		l.stoppingChannel <- true
 	}()
 
-	return l
+	return &l
 }

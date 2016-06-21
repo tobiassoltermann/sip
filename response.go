@@ -1,4 +1,4 @@
-package sipbase
+package sip
 
 import (
 	"fmt"
