@@ -106,6 +106,11 @@ func (m *Message) SetContact(proto string, user string, host string, port int) *
 	m.Headers.ReplaceAddHeader("Contact", value)
 	return m
 }
+func (m *Message) SetContactValue(value string) *Message {
+	m.Headers.ReplaceAddHeader("Contact", value)
+	return m
+}
+
 func (m *Message) SetUserAgent(value string) *Message {
 	m.Headers.ReplaceAddHeader("User-Agent", value)
 	return m

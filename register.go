@@ -5,4 +5,6 @@ type RegisterInfo struct {
 	Client    Connectinfo
 	Username  string
 	UserInfo  UserInfo
+
+	Expiration int
 }

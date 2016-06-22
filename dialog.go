@@ -149,3 +149,43 @@ func (d *Dialog) SendRegister(registerInfo *RegisterInfo, authInfo *AuthInformat
 
 	d.sendMessage(&c)
 }
+
+func (d *Dialog) SendDeregister(registerInfo *RegisterInfo, authInfo *AuthInformation) {
+	d.client.registerInfo = registerInfo
+	clientCI := registerInfo.Client
+	registrarCI := registerInfo.Registrar
+	userName := registerInfo.Username
+
+	c := CreateRequest("REGISTER", "sip:"+registerInfo.Registrar.Host)
+
+	d.CallID = RandSeq(10)
+	crtCSeq := d.cseq()
+
+	c.SetVia(clientCI.Transport, clientCI.Host, clientCI.Port, d.viaBranch)
+	if d.Local == "" {
+		fromTag := RandSeq(10)
+		c.SetFrom("sip", userName, registrarCI.Host, fromTag)
+		d.Local = c.GetFrom()
+	} else {
+		c.SetFromValue(d.Local)
+	}
+
+	if d.Remote == "" {
+		c.SetTo("sip", userName, registrarCI.Host, "")
+		d.Remote = c.GetTo()
+	} else {
+		c.SetToValue(d.Remote)
+	}
+	c.SetCallId(d.CallID)
+	c.SetCSeq(crtCSeq, "REGISTER")
+	c.SetContactValue("*")
+	c.SetExpires(0)
+	if authInfo != nil {
+		c.SetDigestAuthorizationHeader(*authInfo)
+	}
+	c.SetUserAgent("sipbell/0.1")
+	c.SetAllow([]string{"PRACK", "INVITE", "ACK", "BYE", "CANCEL", "UPDATE", "INFO", "SUBSCRIBE", "NOTIFY", "OPTIONS", "REFER", "MESSAGE"})
+	c.SetContentLength(0)
+
+	d.sendMessage(&c)
+}

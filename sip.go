@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"time"
 )
 
 type RegistrationResult int
@@ -20,11 +21,14 @@ type SipClient struct {
 	socket           net.Conn
 	Listeners        map[string]*Listener
 	DefaultTransport string
-	registerInfo     *RegisterInfo
 	done             chan int
 
 	callCallback   CallCallback
 	cancelCallback CallCallback
+
+	registerInfo             *RegisterInfo
+	keepRegistering          bool
+	cancelRegistrationSignal chan bool
 }
 type Call struct {
 	From string
@@ -33,7 +37,7 @@ type CallCallback func(*Call)
 
 func CreateClient() SipClient {
 	s := SipClient{}
-
+	s.cancelRegistrationSignal = make(chan bool, 1)
 	// DEFAULTS:
 	s.Listeners = make(map[string]*Listener)
 	return s
@@ -116,7 +120,36 @@ func (s *SipClient) SetDefaultTransport(transport string) {
 	s.DefaultTransport = transport
 }
 
+func (s *SipClient) scheduleRegisterJob() {
+	s.register(s.registerInfo, false)
+	go func() {
+		if s.keepRegistering {
+			select {
+			case <-time.After(time.Duration(s.registerInfo.Expiration) * time.Second):
+				s.scheduleRegisterJob()
+			case <-s.cancelRegistrationSignal:
+				s.keepRegistering = false
+			}
+		}
+	}()
+}
+
 func (s *SipClient) TryRegister(registerInfo *RegisterInfo) (RegistrationResult, error) {
+	s.keepRegistering = true
+	log.Println("Register")
+	result, err := s.register(registerInfo, false)
+	if result == OKAY {
+		s.scheduleRegisterJob()
+	}
+	return result, err
+}
+
+func (s *SipClient) Deregister(registerInfo *RegisterInfo) (RegistrationResult, error) {
+	s.cancelRegistrationSignal <- true
+	return s.register(registerInfo, true)
+}
+
+func (s *SipClient) register(registerInfo *RegisterInfo, unregister bool) (RegistrationResult, error) {
 	connectInfo := registerInfo.Registrar
 	if connectInfo.Transport == "" {
 		connectInfo.Transport = "tcp"
@@ -150,6 +183,7 @@ func (s *SipClient) TryRegister(registerInfo *RegisterInfo) (RegistrationResult,
 				}
 				switch finalCode {
 				case 200:
+					s.registerInfo.Expiration = m.GetExpires() - 2
 					unauthRegResult <- OKAY
 					return
 				case 401:
@@ -166,7 +200,11 @@ func (s *SipClient) TryRegister(registerInfo *RegisterInfo) (RegistrationResult,
 		}
 
 	})
-	dialog.SendRegister(registerInfo, nil)
+	if !unregister {
+		dialog.SendRegister(registerInfo, nil)
+	} else {
+		dialog.SendDeregister(registerInfo, nil)
+	}
 
 	res := <-unauthRegResult
 	if res == OKAY {
@@ -200,6 +238,7 @@ func (s *SipClient) TryRegister(registerInfo *RegisterInfo) (RegistrationResult,
 				}
 				switch finalCode {
 				case 200:
+					s.registerInfo.Expiration = m.GetExpires() - 2
 					authRegResult <- OKAY
 					return
 				case 401:
@@ -222,11 +261,17 @@ func (s *SipClient) TryRegister(registerInfo *RegisterInfo) (RegistrationResult,
 			digestAuthInfo.GetPassword(),
 			"sip:" + connectInfo.Host,
 		}
-		dialog.SendRegister(registerInfo, &authInfo)
+
+		if !unregister {
+			dialog.SendRegister(registerInfo, &authInfo)
+		} else {
+			dialog.SendDeregister(registerInfo, &authInfo)
+		}
+
 		//dialog.SendRegister(&authInfo, connectInfo)
 	}
-
 	res2 := <-authRegResult
+
 	return res2, innerErr
 }
 
